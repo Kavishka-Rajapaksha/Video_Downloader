@@ -1,9 +1,10 @@
 import os
+import requests
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButton,
-    QFileDialog, QMessageBox, QComboBox, QProgressBar, QGroupBox
+    QFileDialog, QMessageBox, QComboBox, QProgressBar, QGroupBox, QHBoxLayout
 )
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QPixmap
 from PyQt5.QtCore import Qt
 import yt_dlp
 
@@ -17,7 +18,7 @@ class VideoDownloader(QWidget):
 
         # Window Title and Size
         self.setWindowTitle("Modern Video Downloader")
-        self.setGeometry(100, 100, 700, 500)
+        self.setGeometry(100, 100, 700, 600)
         self.setStyleSheet("""
             QWidget {
                 background-color: #ffffff;
@@ -75,12 +76,29 @@ class VideoDownloader(QWidget):
         self.url_input.textChanged.connect(self.reset_on_new_link)
         self.url_layout.addWidget(self.url_input)
 
-        self.fetch_formats_button = QPushButton("Fetch Video Qualities")
+        self.fetch_formats_button = QPushButton("Fetch Video Info")
         self.fetch_formats_button.clicked.connect(self.fetch_formats)
         self.url_layout.addWidget(self.fetch_formats_button)
 
         self.url_group.setLayout(self.url_layout)
         self.layout.addWidget(self.url_group)
+
+        # Video Preview Section
+        self.preview_group = QGroupBox("Video Preview")
+        self.preview_layout = QHBoxLayout()
+
+        self.video_thumbnail = QLabel()
+        self.video_thumbnail.setPixmap(QPixmap())
+        self.video_thumbnail.setFixedSize(200, 150)
+        self.video_thumbnail.setScaledContents(True)
+        self.preview_layout.addWidget(self.video_thumbnail)
+
+        self.video_title = QLabel("Title: N/A")
+        self.video_title.setWordWrap(True)
+        self.preview_layout.addWidget(self.video_title)
+
+        self.preview_group.setLayout(self.preview_layout)
+        self.layout.addWidget(self.preview_group)
 
         # Quality Selection Section
         self.quality_group = QGroupBox("Step 2: Select Video Quality")
@@ -149,11 +167,15 @@ class VideoDownloader(QWidget):
         self.setLayout(self.layout)
 
     def reset_on_new_link(self):
-        """Resets quality dropdown and disables download button when a new link is pasted."""
+        """Resets quality dropdown, video preview, and disables download button."""
         self.quality_selector.clear()
         self.quality_selector.setEnabled(False)
         self.download_button.setEnabled(False)
         self.progress_bar.setValue(0)
+        self.video_thumbnail.setPixmap(QPixmap())
+        self.video_title.setText("Title: N/A")
+        self.rename_input.clear()  # Clear rename input field
+        self.rename_input.setPlaceholderText("")  # Reset placeholder text
         self.status_label.setText("Status: Ready for new video")
 
     def select_folder(self):
@@ -167,7 +189,7 @@ class VideoDownloader(QWidget):
 
     def fetch_formats(self):
         self.progress_bar.setValue(0)
-        self.status_label.setText("Fetching video formats...")
+        self.status_label.setText("Fetching video information...")
 
         url = self.url_input.text()
 
@@ -179,6 +201,14 @@ class VideoDownloader(QWidget):
             self.quality_selector.clear()
             with yt_dlp.YoutubeDL() as ydl:
                 info = ydl.extract_info(url, download=False)
+                self.video_title.setText(f"Title: {info['title']}")
+
+                # Fetch and display thumbnail
+                thumbnail_url = info.get('thumbnail')
+                if thumbnail_url:
+                    pixmap = self.fetch_thumbnail(thumbnail_url)
+                    self.video_thumbnail.setPixmap(pixmap)
+
                 formats = info.get('formats', [])
                 self.format_options = []
 
@@ -205,11 +235,22 @@ class VideoDownloader(QWidget):
 
                 self.quality_selector.setEnabled(True)
                 self.download_button.setEnabled(True)
-                self.status_label.setText("Formats fetched successfully!")
+                self.status_label.setText("Video information fetched successfully!")
 
         except Exception as e:
-            self.status_label.setText("Failed to fetch formats.")
-            QMessageBox.critical(self, "Error", f"Failed to fetch formats: {str(e)}")
+            self.status_label.setText("Failed to fetch video information.")
+            QMessageBox.critical(self, "Error", f"Failed to fetch video information: {str(e)}")
+
+    def fetch_thumbnail(self, url):
+        """Fetches the thumbnail image from a URL."""
+        try:
+            response = requests.get(url)
+            response.raise_for_status()
+            pixmap = QPixmap()
+            pixmap.loadFromData(response.content)
+            return pixmap
+        except Exception:
+            return QPixmap()
 
     def download_video(self):
         self.progress_bar.setValue(0)
@@ -258,8 +299,10 @@ class VideoDownloader(QWidget):
                     f"Downloading... {progress}% - Speed: {self.format_size(speed)}/s - ETA: {self.format_time(eta)}"
                 )
             elif d['status'] == 'finished':
-                self.status_label.setText("Download completed!")
                 self.progress_bar.setValue(100)
+                QMessageBox.information(self, "Success", "Download completed successfully!")
+                self.progress_bar.setValue(0)  # Reset progress bar after success
+                self.status_label.setText("Status: Idle")
 
         ydl_opts = {
             'outtmpl': os.path.join(save_path, f"{custom_name}.%(ext)s"),
