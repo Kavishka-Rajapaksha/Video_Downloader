@@ -1,10 +1,10 @@
+import os
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButton,
     QFileDialog, QMessageBox, QComboBox, QProgressBar, QGroupBox
 )
 from PyQt5.QtGui import QFont
 from PyQt5.QtCore import Qt
-import os
 import yt_dlp
 
 
@@ -12,9 +12,12 @@ class VideoDownloader(QWidget):
     def __init__(self):
         super().__init__()
 
+        # Set default download folder to the user's Downloads directory
+        self.default_download_folder = os.path.join(os.path.expanduser("~"), "Downloads")
+
         # Window Title and Size
         self.setWindowTitle("Modern Video Downloader")
-        self.setGeometry(100, 100, 700, 450)
+        self.setGeometry(100, 100, 700, 500)
         self.setStyleSheet("""
             QWidget {
                 background-color: #ffffff;
@@ -69,6 +72,7 @@ class VideoDownloader(QWidget):
 
         self.url_input = QLineEdit()
         self.url_input.setPlaceholderText("e.g., https://www.youtube.com/watch?v=...")
+        self.url_input.textChanged.connect(self.reset_on_new_link)
         self.url_layout.addWidget(self.url_input)
 
         self.fetch_formats_button = QPushButton("Fetch Video Qualities")
@@ -89,16 +93,31 @@ class VideoDownloader(QWidget):
         self.quality_group.setLayout(self.quality_layout)
         self.layout.addWidget(self.quality_group)
 
+        # File Rename Section
+        self.rename_group = QGroupBox("Step 3: Rename Downloaded File (Optional)")
+        self.rename_layout = QVBoxLayout()
+
+        self.rename_label = QLabel("Enter the new file name (leave blank for default):")
+        self.rename_layout.addWidget(self.rename_label)
+
+        self.rename_input = QLineEdit()
+        self.rename_input.setPlaceholderText("e.g., MyAwesomeVideo")
+        self.rename_layout.addWidget(self.rename_input)
+
+        self.rename_group.setLayout(self.rename_layout)
+        self.layout.addWidget(self.rename_group)
+
         # Save Location Section
-        self.save_group = QGroupBox("Step 3: Choose Save Location")
+        self.save_group = QGroupBox("Step 4: Choose Save Location")
         self.save_layout = QVBoxLayout()
 
         self.save_button = QPushButton("Select Save Folder")
         self.save_button.clicked.connect(self.select_folder)
         self.save_layout.addWidget(self.save_button)
 
-        self.selected_folder = QLabel("No folder selected.")
-        self.selected_folder.setStyleSheet("color: #555; font-size: 14px;")
+        # Prepopulate with the default Downloads folder
+        self.selected_folder = QLabel(f"Default: {self.default_download_folder}")
+        self.selected_folder.setStyleSheet("color: black; font-size: 14px;")
         self.save_layout.addWidget(self.selected_folder)
 
         self.save_group.setLayout(self.save_layout)
@@ -129,16 +148,26 @@ class VideoDownloader(QWidget):
         # Set Main Layout
         self.setLayout(self.layout)
 
+    def reset_on_new_link(self):
+        """Resets quality dropdown and disables download button when a new link is pasted."""
+        self.quality_selector.clear()
+        self.quality_selector.setEnabled(False)
+        self.download_button.setEnabled(False)
+        self.progress_bar.setValue(0)
+        self.status_label.setText("Status: Ready for new video")
+
     def select_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Folder")
         if folder:
             self.selected_folder.setText(folder)
             self.selected_folder.setStyleSheet("color: black;")
+        else:
+            self.selected_folder.setText(f"Default: {self.default_download_folder}")
+            self.selected_folder.setStyleSheet("color: black;")
 
     def fetch_formats(self):
-        # Reset progress bar and status for new video
         self.progress_bar.setValue(0)
-        self.status_label.setText("Status: Ready to fetch formats")
+        self.status_label.setText("Fetching video formats...")
 
         url = self.url_input.text()
 
@@ -148,7 +177,6 @@ class VideoDownloader(QWidget):
 
         try:
             self.quality_selector.clear()
-            self.status_label.setText("Fetching video formats...")
             with yt_dlp.YoutubeDL() as ydl:
                 info = ydl.extract_info(url, download=False)
                 formats = info.get('formats', [])
@@ -184,20 +212,24 @@ class VideoDownloader(QWidget):
             QMessageBox.critical(self, "Error", f"Failed to fetch formats: {str(e)}")
 
     def download_video(self):
-        # Reset progress bar and status for new download
         self.progress_bar.setValue(0)
         self.status_label.setText("Starting download...")
 
         url = self.url_input.text()
-        save_path = self.selected_folder.text()
         selected_format = self.quality_selector.currentIndex()
+
+        # Default to Downloads folder if none is selected
+        save_path = self.selected_folder.text()
+        if save_path.startswith("Default:"):
+            save_path = self.default_download_folder
+
+        # Get custom file name
+        custom_name = self.rename_input.text()
+        if not custom_name:
+            custom_name = '%(title)s'
 
         if not url:
             QMessageBox.warning(self, "Input Error", "Please enter a video URL.")
-            return
-
-        if save_path == "No folder selected.":
-            QMessageBox.warning(self, "Input Error", "Please select a save location.")
             return
 
         if selected_format == -1:
@@ -206,11 +238,11 @@ class VideoDownloader(QWidget):
 
         try:
             format_id = self.format_options[selected_format][1]
-            self.download_from_url(url, save_path, format_id)
+            self.download_from_url(url, save_path, format_id, custom_name)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to download video: {str(e)}")
 
-    def download_from_url(self, url, save_path, format_id):
+    def download_from_url(self, url, save_path, format_id, custom_name):
         def progress_hook(d):
             if d['status'] == 'downloading':
                 downloaded_bytes = d.get('downloaded_bytes', 0)
@@ -230,7 +262,7 @@ class VideoDownloader(QWidget):
                 self.progress_bar.setValue(100)
 
         ydl_opts = {
-            'outtmpl': os.path.join(save_path, '%(title)s.%(ext)s'),
+            'outtmpl': os.path.join(save_path, f"{custom_name}.%(ext)s"),
             'format': format_id,
             'merge_output_format': 'mp4',
             'progress_hooks': [progress_hook],
